@@ -12,10 +12,16 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+
 import org.msse.demo.mockdata.music.ticket.Ticket;
 import org.msse.demo.mockdata.music.event.Event;
 import org.msse.demo.mockdata.music.artist.Artist;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
+
+import static org.improving.workshop.utils.DataFaker.STREAMS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class TopSellingGenreByVenueTest {
@@ -24,6 +30,7 @@ class TopSellingGenreByVenueTest {
     private TestInputTopic<String, Ticket> ticketInputTopic;
     private TestInputTopic<String, Event> eventInputTopic;
     private TestInputTopic<String, Artist> artistInputTopic;
+    private TestOutputTopic<String, LinkedHashMap<String, Long>> outputTopic;
 
     @BeforeEach
     public void setup() {
@@ -52,9 +59,9 @@ class TopSellingGenreByVenueTest {
         );
 
         outputTopic = driver.createOutputTopic(
-                TopYoungArtistByState.OUTPUT_TOPIC,
+                TopSellingGenreByVenue.OUTPUT_TOPIC,
                 Serdes.String().deserializer(),
-                Streams.SERDE_TOPARTISTBYSTATE_JSON.deserializer()
+                TopSellingGenreByVenue.LINKED_HASH_MAP_JSON_SERDE.deserializer()
         );
     }
 
