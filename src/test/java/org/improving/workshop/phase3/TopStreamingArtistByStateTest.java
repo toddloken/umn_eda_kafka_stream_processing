@@ -12,10 +12,16 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.msse.demo.mockdata.music.stream.Stream;
-import org.msse.demo.mockdata.music.customer.Customer;
-import org.msse.demo.mockdata.music.address.Address;
 
+import org.msse.demo.mockdata.music.stream.Stream;
+import org.msse.demo.mockdata.customer.profile.Customer;
+import org.msse.demo.mockdata.customer.address.Address;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
+
+import static org.improving.workshop.utils.DataFaker.STREAMS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class TopStreamingArtistByStateTest {
@@ -24,6 +30,7 @@ class TopStreamingArtistByStateTest {
     private TestInputTopic<String, Stream> streamInputTopic;
     private TestInputTopic<String, Customer> customerInputTopic;
     private TestInputTopic<String, Address> addressInputTopic;
+    private TestOutputTopic<String, LinkedHashMap<String, Long>> outputTopic;
 
     @BeforeEach
     public void setup() {
@@ -52,9 +59,9 @@ class TopStreamingArtistByStateTest {
         );
 
         outputTopic = driver.createOutputTopic(
-                TopYoungArtistByState.OUTPUT_TOPIC,
+                TopStreamingArtistByState.OUTPUT_TOPIC,
                 Serdes.String().deserializer(),
-                Streams.SERDE_TOPARTISTBYSTATE_JSON.deserializer()
+                TopStreamingArtistByState.LINKED_HASH_MAP_JSON_SERDE.deserializer()
         );
     }
 
