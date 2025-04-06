@@ -1,6 +1,5 @@
 package org.improving.workshop.phase3;
 
-import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -14,12 +13,6 @@ import org.apache.kafka.streams.kstream.Materialized;
 import org.apache.kafka.streams.kstream.Produced;
 import org.springframework.kafka.support.serializer.JsonSerde;
 
-import org.improving.workshop.samples.TopCustomerArtists.SortedCounterMap;
-import org.msse.demo.mockdata.music.stream.Stream;
-import org.msse.demo.mockdata.customer.profile.Customer;
-import org.msse.demo.mockdata.customer.address.Address;
-import org.msse.demo.mockdata.customer.FullCustomer;
-
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -31,13 +24,20 @@ import static org.improving.workshop.Streams.*;
 @Slf4j
 public class TopStreamingArtistByState {
     // Reference TOPIC_DATA_DEMO_* properties in Streams
-    public static final String INPUT_TOPIC = "data-demo-{entity}";
+    public static final String ARTIST_INPUT_TOPIC = TOPIC_DATA_DEMO_ARTISTS;
+//    public static final String EVENT_INPUT_TOPIC = TOPIC_DATA_DEMO_EVENTS;
+//    public static final String TICKET_INPUT_TOPIC = TOPIC_DATA_DEMO_TICKETS;
+
     // MUST BE PREFIXED WITH "kafka-workshop-"
+    public static final String ARTIST_KTABLE = "kafka-workshop-artist-ktable";
+//    public static final String EVENT_ARTIST_KTABLE = "kafka-workshop-event-artist-ktable";
+//    public static final String OUTPUT_TOPIC = "kafka-workshop-top-selling-genre-by-venue";
+
+
     public static final String OUTPUT_TOPIC = "kafka-workshop-top-streaming-artist-by-state";
 
     public static final JsonSerde<SortedCounterMap> COUNTER_MAP_JSON_SERDE = new JsonSerde<>(SortedCounterMap.class);
 
-    // Jackson is converting Value into Integer Not Long due to erasure,
     //public static final JsonSerde<LinkedHashMap<String, Long>> LINKED_HASH_MAP_JSON_SERDE = new JsonSerde<>(LinkedHashMap.class);
     public static final JsonSerde<LinkedHashMap<String, Long>> LINKED_HASH_MAP_JSON_SERDE
             = new JsonSerde<>(
@@ -62,13 +62,76 @@ public class TopStreamingArtistByState {
 
     static void configureTopology(final StreamsBuilder builder) {
         builder
-            .stream(INPUT_TOPIC, Consumed.with(Serdes.String(), Serdes.String()))
-            .peek((key, value) -> log.info("Event Received: {},{}", key, value))
+                .stream(TOPIC_DATA_DEMO_STREAMS, Consumed.with(Serdes.String(), SERDE_STREAM_JSON))
+                .peek((streamId, stream) -> log.info("Stream Received: {}", stream))
 
-            // add topology here
+                // rekey so that the groupBy is by customerid and not streamid
+                // groupBy is shorthand for (selectKey + groupByKey)
+                .groupBy((k, v) -> v.customerid())
 
-            // NOTE: when using ccloud, the topic must exist or 'auto.create.topics.enable' set to true (dedicated cluster required)
-            .to(OUTPUT_TOPIC, Produced.with(Serdes.String(), Serdes.String()));
+                // keep track of each customer's artist stream counts in a ktable
+                .aggregate(
+                        // initializer
+                        SortedCounterMap::new,
+
+                        // aggregator
+                        (customerId, stream, customerArtistStreamCounts) -> {
+                            customerArtistStreamCounts.incrementCount(stream.artistid());
+                            return customerArtistStreamCounts;
+                        },
+
+                        // ktable (materialized) configuration
+                        Materialized
+                                .<String, SortedCounterMap>as(persistentKeyValueStore("customer-artist-stream-counts"))
+                                .withKeySerde(Serdes.String())
+                                .withValueSerde(COUNTER_MAP_JSON_SERDE)
+                )
+
+                // turn it back into a stream so that it can be produced to the OUTPUT_TOPIC
+                .toStream()
+                // trim to only the top 3
+                .mapValues(sortedCounterMap -> sortedCounterMap.top(10))
+                .peek((key, counterMap) -> log.info("Customer {}'s Top 10 Streamed Artists: {}", key, counterMap))
+                // NOTE: when using ccloud, the topic must exist or 'auto.create.topics.enable' set to true (dedicated cluster required)
+                .to(OUTPUT_TOPIC, Produced.with(Serdes.String(), LINKED_HASH_MAP_JSON_SERDE));
     }
 
+    @Data
+    @AllArgsConstructor
+    public static class SortedCounterMap {
+        private int maxSize;
+        private LinkedHashMap<String, Long> map;
+
+        public SortedCounterMap() {
+            this(1000);
+        }
+
+        public SortedCounterMap(int maxSize) {
+            this.maxSize = maxSize;
+            this.map = new LinkedHashMap<>();
+        }
+
+        public void incrementCount(String id) {
+            map.compute(id, (k, v) -> v == null ? 1 : v + 1);
+
+            // replace with sorted map
+            this.map = map.entrySet().stream()
+                    .sorted(reverseOrder(Map.Entry.comparingByValue()))
+                    // keep a limit on the map size
+                    .limit(maxSize)
+                    .collect(toMap(Map.Entry::getKey, Map.Entry::getValue, (e1, e2) -> e1, LinkedHashMap::new));
+        }
+
+        /**
+         * Return the top {limit} items from the counter map
+         *
+         * @param limit the number of records to include in the returned map
+         * @return a new LinkedHashMap with only the top {limit} elements
+         */
+        public LinkedHashMap<String, Long> top(int limit) {
+            return map.entrySet().stream()
+                    .limit(limit)
+                    .collect(toMap(Map.Entry::getKey, Map.Entry::getValue, (e1, e2) -> e1, LinkedHashMap::new));
+        }
+    }
 }
