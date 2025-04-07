@@ -127,6 +127,10 @@ class TopStreamingArtistByStateTest {
         assertEquals(addressId1,result.key);
     }
 
+    // ====================================================================
+    // Test Two
+    // ====================================================================
+
     @Test
     @DisplayName("Check CustomerAddress KTable Pipeline")
     public void customer_address_ktable_write_one_then_read_one() {
@@ -151,5 +155,9 @@ class TopStreamingArtistByStateTest {
         // ASSERT - Verify initial top artists state
         assertEquals(addressId1,result.key);
     }
+
+    // ====================================================================
+    // Test Two
+    // ====================================================================
 
 }

@@ -25,7 +25,7 @@ import static org.apache.kafka.streams.state.Stores.persistentKeyValueStore;
 import static org.improving.workshop.Streams.*;
 
 //===============================================================================================================
-// Topics Ktables and Serdes
+// Topics Ktables and Serdes -
 //===============================================================================================================
 
 @Slf4j
