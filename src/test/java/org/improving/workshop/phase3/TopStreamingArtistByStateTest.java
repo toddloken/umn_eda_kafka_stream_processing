@@ -26,15 +26,19 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 @Slf4j
 class TopStreamingArtistByStateTest {
     private TopologyTestDriver driver;
-
     private TestInputTopic<String, Stream> streamInputTopic;
     private TestInputTopic<String, Customer> customerInputTopic;
     private TestInputTopic<String, Address> addressInputTopic;
     private TestInputTopic<String, Artist> artistInputTopic;
 
-    private TestOutputTopic<String, Artist> artistKTable;
-    private TestOutputTopic<String, Customer> customerArtistKTable;
+    private TestOutputTopic<String, Address> addressKTable;
+    private TestOutputTopic<String, TopStreamingArtistByState.CustomerAddress> customerAddressKTable;
+    private TestOutputTopic<String,TopStreamingArtistByState.CustomerAddressStream> customerAddressStreamKTable;
     private TestOutputTopic<String, LinkedHashMap<String, Long>> outputTopic;
+
+    // ====================================================================
+    // Before Each
+    // ====================================================================
 
     @BeforeEach
     public void setup() {
@@ -44,10 +48,10 @@ class TopStreamingArtistByStateTest {
 
         driver = new TopologyTestDriver(streamsBuilder.build(), Streams.buildProperties());
 
-        streamInputTopic = driver.createInputTopic(
-                Streams.TOPIC_DATA_DEMO_STREAMS,
+        artistInputTopic = driver.createInputTopic(
+                Streams.TOPIC_DATA_DEMO_ARTISTS,
                 Serdes.String().serializer(),
-                Streams.SERDE_STREAM_JSON.serializer()
+                Streams.SERDE_ARTIST_JSON.serializer()
         );
 
         customerInputTopic = driver.createInputTopic(
@@ -62,23 +66,29 @@ class TopStreamingArtistByStateTest {
                 Streams.SERDE_ADDRESS_JSON.serializer()
         );
 
-        artistInputTopic = driver.createInputTopic(
-                Streams.TOPIC_DATA_DEMO_ARTISTS,
+        streamInputTopic = driver.createInputTopic(
+                Streams.TOPIC_DATA_DEMO_STREAMS,
                 Serdes.String().serializer(),
-                Streams.SERDE_ARTIST_JSON.serializer()
+                Streams.SERDE_STREAM_JSON.serializer()
         );
 
-        artistKTable = driver.createOutputTopic(
-                TopSellingGenreByVenue.ARTIST_KTABLE,
+        addressKTable = driver.createOutputTopic(
+                TopStreamingArtistByState.ADDRESS_KTABLE,
                 Serdes.String().deserializer(),
-                Streams.SERDE_ARTIST_JSON.deserializer()
+                Streams.SERDE_ADDRESS_JSON.deserializer()
         );
 
-//        customerArtistKTable = driver.createOutputTopic(
-//                TopSellingGenreByVenue.CUSTOMER_ARE,
-//                Serdes.String().deserializer(),
-//                Streams.SERDE_ARTIST_JSON.deserializer()
-//        );
+        customerAddressKTable = driver.createOutputTopic(
+                TopStreamingArtistByState.CUSTOMER_ADDRESS_KTABLE,
+                Serdes.String().deserializer(),
+                TopStreamingArtistByState.CUSTOMER_ADDRESS_JSON_SERDE.deserializer()
+        );
+
+        customerAddressStreamKTable = driver.createOutputTopic(
+                TopStreamingArtistByState.CUSTOMER_ADDRESS_STREAM_KTABLE,
+                Serdes.String().deserializer(),
+                TopStreamingArtistByState.CUSTOMER_ADDRESS_STREAM_JSON_SERDE.deserializer()
+        );
 
 
         outputTopic = driver.createOutputTopic(
@@ -88,10 +98,19 @@ class TopStreamingArtistByStateTest {
         );
     }
 
+    // ====================================================================
+    // After Each
+    // ====================================================================
+
     @AfterEach
     public void cleanup() {
         driver.close();
     }
+
+
+    // ====================================================================
+    // Test one
+    // ====================================================================
 
     @Test
     @DisplayName("Phase3 Top Streaming Artist in Each State")
