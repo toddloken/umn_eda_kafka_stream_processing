@@ -240,7 +240,7 @@ public class TopStreamingArtistByState {
         public Address address;
         public Customer customer;
         public Stream stream;
-        public Artist artist
+        public Artist artist;
     }
 
     //===============================================================================================================
