@@ -16,6 +16,7 @@ import org.msse.demo.mockdata.music.stream.Stream;
 import java.util.LinkedHashMap;
 
 import static org.improving.workshop.utils.DataFaker.ADDRESSES;
+import static org.improving.workshop.utils.DataFaker.CUSTOMERS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @Slf4j
@@ -125,4 +126,30 @@ class TopStreamingArtistByStateTest {
         // ASSERT - Verify initial top artists state
         assertEquals(addressId1,result.key);
     }
+
+    @Test
+    @DisplayName("Check CustomerAddress KTable Pipeline")
+    public void customer_address_ktable_write_one_then_read_one() {
+        // ARRANGE
+        String addressId1 = "address-1";
+        Address address1 = ADDRESSES.generateCustomerAddress(addressId1);
+        log.info("Created Address with id '{}' and value '{}'", address1, addressId1);
+
+        String customerID1 = "customer-1";
+        Customer customer1 = CUSTOMERS.generate(customerID1);
+        log.info("Created Customer with id '{}' and value '{}'", customer1, customerID1);
+
+
+        // ACT - First batch of stream events
+        // Inputs
+        addressInputTopic.pipeInput(addressId1,address1);
+        customerInputTopic.pipeInput(customerID1, customer1);
+
+        // Outputs
+        KeyValue<String, Address> result = addressKTable.readKeyValue();
+
+        // ASSERT - Verify initial top artists state
+        assertEquals(addressId1,result.key);
+    }
+
 }
