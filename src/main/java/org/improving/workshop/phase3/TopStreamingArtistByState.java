@@ -33,8 +33,9 @@ public class TopStreamingArtistByState {
     // Reference TOPIC_DATA_DEMO_* properties in Streams
     public static final String ADDRESS_INPUT_TOPIC = TOPIC_DATA_DEMO_ADDRESSES;
     public static final String CUSTOMER_INPUT_TOPIC = TOPIC_DATA_DEMO_CUSTOMERS;
-    public static final String ARTIST_INPUT_TOPIC = TOPIC_DATA_DEMO_ARTISTS;
     public static final String STREAM_INPUT_TOPIC = TOPIC_DATA_DEMO_STREAMS;
+    public static final String ARTIST_INPUT_TOPIC = TOPIC_DATA_DEMO_ARTISTS;
+
 
 
     // KTABLE DEFINITIONS MUST BE PREFIXED WITH "kafka-workshop-"
@@ -46,7 +47,7 @@ public class TopStreamingArtistByState {
     // Serdes
     public static final JsonSerde<CustomerAddress> CUSTOMER_ADDRESS_JSON_SERDE = new JsonSerde<>(CustomerAddress.class);
     public static final JsonSerde<CustomerAddressStream> CUSTOMER_ADDRESS_STREAM_JSON_SERDE = new JsonSerde<>(CustomerAddressStream.class);
-    public static final JsonSerde<EnrichedStream> ENRICHED_TICKET_JSON_SERDE = new JsonSerde<>(EnrichedStream.class);
+    public static final JsonSerde<EnrichedStream> ENRICHED_STREAM_JSON_SERDE = new JsonSerde<>(EnrichedStream.class);
     public static final JsonSerde<SortedCounterMap> COUNTER_MAP_JSON_SERDE = new JsonSerde<>(SortedCounterMap.class);
 
 
@@ -82,7 +83,9 @@ public class TopStreamingArtistByState {
         //======================
         // KTables
         //=======================
+        //
         // Address
+        //
         KTable<String, Address> addressTable = builder
                 .table(
                         ADDRESS_INPUT_TOPIC,
@@ -96,7 +99,9 @@ public class TopStreamingArtistByState {
                 .peek((key, artist) -> log.info("Address '{}' registered with value '{}'", key, artist))
                 .to(ADDRESS_KTABLE, Produced.with(Serdes.String(), SERDE_ADDRESS_JSON));
 
+        //
         // CustomerAddress
+        //
         KTable<String, CustomerAddress> customerAddressKTable = builder
                 .stream(CUSTOMER_INPUT_TOPIC, Consumed.with(Serdes.String(), SERDE_CUSTOMER_JSON))
                 .peek((customerId, customer) -> log.info("Customer '{}' registered with value '{}'", customerId, customer))
@@ -127,43 +132,84 @@ public class TopStreamingArtistByState {
                 .peek((key, customerAddress) -> log.info("CustomerAddress '{}' registered with value '{}'", key, customerAddress))
                 .to(CUSTOMER_ADDRESS_KTABLE, Produced.with(Serdes.String(),CUSTOMER_ADDRESS_JSON_SERDE));
 
+        //
+        // CustomerAddressStream
+        //
+        KTable<String, CustomerAddressStream> customerAddressStreamKTable = builder
+                .stream(STREAM_INPUT_TOPIC, Consumed.with(Serdes.String(), SERDE_STREAM_JSON))
+                .peek((streamId, stream) -> log.info("Stream '{}' registered with value '{}'", streamId,stream))
 
+                .selectKey((streamId, stream) -> stream.id(), Named.as("rekey-stream-by-id"))
+
+                // Join to the customerAddress KTable. Causes a repartition
+                .join(
+                        customerAddressKTable, // Join to table
+                        (stream, CustomerAddress )
+                                -> new CustomerAddressStream(stream, CustomerAddress.customer,CustomerAddress.address)
+                )
+
+                .peek((key, value)-> log.info("CustomerAddressStream with CustomerId '{}' and StreamId '{}' registered with value '{}'",value.customer.id(), value.address.id(), value))
+
+                //rekey
+                .selectKey((key, customerAddressStream)
+                        -> customerAddressStream.stream.id(), Named.as("rekey-customerAddress-by-streamid"))
+
+                .toTable(
+                        Materialized
+                                .<String, CustomerAddressStream>as(persistentKeyValueStore(CUSTOMER_ADDRESS_STREAM_KTABLE))
+                                .withKeySerde(Serdes.String())
+                                .withValueSerde(CUSTOMER_ADDRESS_STREAM_JSON_SERDE)
+                );
+        customerAddressStreamKTable
+                .toStream()
+                .peek((key, customerAddressStream) -> log.info("CustomerAddressStream '{}' registered with value '{}'", key, customerAddressStream))
+                .to(CUSTOMER_ADDRESS_STREAM_KTABLE, Produced.with(Serdes.String(),CUSTOMER_ADDRESS_STREAM_JSON_SERDE));
 
         //=============================
         // builder
         //=============================
         builder
-                .stream(TOPIC_DATA_DEMO_STREAMS, Consumed.with(Serdes.String(), SERDE_STREAM_JSON))
-                .peek((streamId, stream) -> log.info("Stream Received: {}", stream))
+                .stream(TOPIC_DATA_DEMO_ARTISTS, Consumed.with(Serdes.String(), SERDE_ARTIST_JSON))
+                .peek((artistId, artist) -> log.info("Artist Received: {}", artist))
 
-                // rekey so that the groupBy is by customerid and not streamid
-                // groupBy is shorthand for (selectKey + groupByKey)
-                .groupBy((k, v) -> v.customerid())
+                .selectKey((artistId, artist) -> artist.id(), Named.as("rekey-ticket-by-artist"))
+                .peek((artistId, artist) -> log.info("Aritst with ArtistId '{}' registered with value '{}'",artistId, artist))
 
-                // keep track of each customer's artist stream counts in a ktable
-                .aggregate(
-                        // initializer
+                // Join to customerAddressStream. Causes a repartition
+                .join(
+                        customerAddressStreamKTable, // Join to table
+                        (artist, CustomerAddressStream) // Left value, right value
+                                -> new EnrichedStream(CustomerAddressStream.address, CustomerAddressStream.customer, CustomerAddressStream.stream, artist) // ValueJoiner
+                )
+                .peek((artistId, enrichedStream) -> log.info("Enriched Stream joined with id '{}' and value '{}'", artistId, enrichedStream))
+
+
+                .groupBy(
+                        (artistId, enrichedStream) -> enrichedStream.artist.name(),
+                        Grouped.with(Serdes.String(), ENRICHED_STREAM_JSON_SERDE)
+                )
+
+               .aggregate(
                         SortedCounterMap::new,
-
-                        // aggregator
-                        (customerId, stream, customerArtistStreamCounts) -> {
-                            customerArtistStreamCounts.incrementCount(stream.artistid());
-                            return customerArtistStreamCounts;
+                        (artistId, enrichedStream, stateArtistCounts) -> {
+                            stateArtistCounts.incrementCount(enrichedStream.artist.name());
+                            return stateArtistCounts;
                         },
-
-                        // ktable (materialized) configuration
                         Materialized
-                                .<String, SortedCounterMap>as(persistentKeyValueStore("customer-artist-stream-counts"))
+                                .<String, SortedCounterMap>as(persistentKeyValueStore("artist-stream-state-counts"))
                                 .withKeySerde(Serdes.String())
                                 .withValueSerde(COUNTER_MAP_JSON_SERDE)
                 )
 
-                // turn it back into a stream so that it can be produced to the OUTPUT_TOPIC
+                // Turn it back into a stream to produce it to the output topic
                 .toStream()
-                // trim to only the top 3
+                .peek((artistId, sortedCounterMap) -> log.info("Aggregate sorted counter map created with Artist '{}' and value '{}'", artistId, sortedCounterMap))
+
+
                 .mapValues(sortedCounterMap -> sortedCounterMap.top(10))
-                .peek((key, counterMap) -> log.info("Customer {}'s Top 10 Streamed Artists: {}", key, counterMap))
-                // NOTE: when using ccloud, the topic must exist or 'auto.create.topics.enable' set to true (dedicated cluster required)
+                .peek((key, counterMap) -> log.info("Venue {}'s 10 Top Selling Genres: {}", key, counterMap))
+
+                // Output to the output topic
                 .to(OUTPUT_TOPIC, Produced.with(Serdes.String(), LINKED_HASH_MAP_JSON_SERDE));
     }
 
@@ -198,7 +244,7 @@ public class TopStreamingArtistByState {
     }
 
     //===============================================================================================================
-    // Not sure if this will still be needed - but keep for nwo
+    // Not sure if this will still be needed - but keep for now
     //===============================================================================================================
 
     @Data
