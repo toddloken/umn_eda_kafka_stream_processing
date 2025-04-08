@@ -36,21 +36,20 @@ public class TopStreamingArtistByState {
     public static final String STREAM_INPUT_TOPIC = TOPIC_DATA_DEMO_STREAMS;
     public static final String ARTIST_INPUT_TOPIC = TOPIC_DATA_DEMO_ARTISTS;
 
-
-
     // KTABLE DEFINITIONS MUST BE PREFIXED WITH "kafka-workshop-"
     public static final String ADDRESS_KTABLE = "kafka-workshop-address-ktable";
-    public static final String STREAMS_KTABLE = "kafka-workshop-streams-ktable";
+    public static final String STREAM_KTABLE = "kafka-workshop-streams-ktable";
+    public static final String ARTISTS_KTABLE = "kafka-workshop-artists-ktable";
     public static final String CUSTOMER_ADDRESS_KTABLE = "kafka-workshop-customer-address-ktable";
     public static final String CUSTOMER_ADDRESS_STREAM_KTABLE = "kafka-workshop-customer-address-stream-ktable";
     public static final String OUTPUT_TOPIC = "kafka-workshop-top-streaming-artist-by-state";
 
     // Serdes
+    public static final JsonSerde<Artist> ARTISTS_JSON_SERDE = new JsonSerde<>(Artist.class);
     public static final JsonSerde<CustomerAddress> CUSTOMER_ADDRESS_JSON_SERDE = new JsonSerde<>(CustomerAddress.class);
     public static final JsonSerde<CustomerAddressStream> CUSTOMER_ADDRESS_STREAM_JSON_SERDE = new JsonSerde<>(CustomerAddressStream.class);
     public static final JsonSerde<EnrichedStream> ENRICHED_STREAM_JSON_SERDE = new JsonSerde<>(EnrichedStream.class);
     public static final JsonSerde<SortedCounterMap> COUNTER_MAP_JSON_SERDE = new JsonSerde<>(SortedCounterMap.class);
-
 
     public static final JsonSerde<LinkedHashMap<String, Long>> LINKED_HASH_MAP_JSON_SERDE
             = new JsonSerde<>(
@@ -74,176 +73,89 @@ public class TopStreamingArtistByState {
         startStreams(builder);
     }
 
-
     //===============================================================================================================
     // Topology
     //===============================================================================================================
 
     static void configureTopology(final StreamsBuilder builder) {
-
-        //======================
         // KTables
-        //=======================
-
         //
-        // Address
+        // Streams
         //
-        KTable<String, Address> addressTable = builder
+        KTable<String, Stream> streamTable = builder
                 .table(
-                        ADDRESS_INPUT_TOPIC,
+                        STREAM_INPUT_TOPIC,
                         Materialized
-                                .<String, Address>as(persistentKeyValueStore(ADDRESS_KTABLE))
+                                .<String, Stream>as(persistentKeyValueStore(STREAM_KTABLE))
                                 .withKeySerde(Serdes.String())
-                                .withValueSerde(SERDE_ADDRESS_JSON)
+                                .withValueSerde(SERDE_STREAM_JSON)
                 );
-        addressTable
+        streamTable
                 .toStream()
-                .peek((key, artist) -> log.info("Address '{}' registered with value '{}'", key, artist))
-                .to(ADDRESS_KTABLE, Produced.with(Serdes.String(), SERDE_ADDRESS_JSON));
+                .peek((key, stream) -> log.info("Stream '{}' registered with value '{}'", key, stream))
+                .to(STREAM_KTABLE, Produced.with(Serdes.String(), SERDE_STREAM_JSON));
 
-
-        //
-        // CustomerAddress
-        //
-        KTable<String, CustomerAddress> customerAddressKTable = builder
-                .stream(CUSTOMER_INPUT_TOPIC, Consumed.with(Serdes.String(), SERDE_CUSTOMER_JSON))
-                .peek((customerId, customer) -> log.info("Customer '{}' registered with value '{}'", customerId, customer))
-
-                .selectKey((customerId, customer) -> customer.id(), Named.as("rekey-customer-by-id"))
-
-                // Join to the address KTable. Causes a repartition
-                .join(
-                        addressTable, // Join to table
-                        (customer, address)
-                                -> new CustomerAddress(customer,address)
-                )
-
-                .peek((key, value)-> log.info("CustomerArtist with CustomerId '{}' and addressId '{}' registered with value '{}'",value.customer.id(), value.address.id(), value))
-
-                //rekey
-                .selectKey((key, customerAddress)
-                        -> customerAddress.customer.id(), Named.as("rekey-customerAddress-by-customerid"))
-
-                .toTable(
+        // Create a KTable from the Artists topic
+        KTable<String, Artist> artistTable = builder
+                .table(
+                        ARTIST_INPUT_TOPIC,
                         Materialized
-                                .<String, CustomerAddress>as(persistentKeyValueStore(CUSTOMER_ADDRESS_KTABLE))
+                                .<String, Artist>as(persistentKeyValueStore(ARTISTS_KTABLE))
                                 .withKeySerde(Serdes.String())
-                                .withValueSerde(CUSTOMER_ADDRESS_JSON_SERDE)
+                                .withValueSerde(ARTISTS_JSON_SERDE)
                 );
-        customerAddressKTable
+
+        // Log artists as they are loaded
+        artistTable
                 .toStream()
-                .peek((key, customerAddress) -> log.info("CustomerAddress '{}' registered with value '{}'", key, customerAddress))
-                .to(CUSTOMER_ADDRESS_KTABLE, Produced.with(Serdes.String(),CUSTOMER_ADDRESS_JSON_SERDE));
+                .peek((key, artist) -> log.info("Artist '{}' registered with value '{}'", key, artist))
+                .to(ARTISTS_KTABLE, Produced.with(Serdes.String(), ARTISTS_JSON_SERDE));
 
-        //
-        // CustomerAddressStream
-        //
-        KTable<String, CustomerAddressStream> customerAddressStreamKTable = builder
-                .stream(STREAM_INPUT_TOPIC, Consumed.with(Serdes.String(), SERDE_STREAM_JSON))
-                .peek((streamId, stream) -> log.info("Stream '{}' registered with value '{}'", streamId,stream))
+        // Stream table needs to be keyed by artistid to join with artist table
+        KStream<String, Stream> streamByArtistId = streamTable
+                .toStream()
+                .selectKey((streamId, stream) -> stream.artistid());
 
-                .selectKey((streamId, stream) -> stream.id(), Named.as("rekey-stream-by-id"))
-
-                // Join to the customerAddress KTable. Causes a repartition
+        // Join the stream with artist table
+        KStream<String, EnrichedStream> enrichedStream = streamByArtistId
                 .join(
-                        customerAddressKTable, // Join to table
-                        (stream, CustomerAddress )
-                                -> new CustomerAddressStream(stream, CustomerAddress.customer,CustomerAddress.address)
-                )
-
-                .peek((key, value)-> log.info("CustomerAddressStream with CustomerId '{}' and StreamId '{}' registered with value '{}'",value.customer.id(), value.address.id(), value))
-
-                //rekey
-                .selectKey((key, customerAddressStream)
-                        -> customerAddressStream.stream.id(), Named.as("rekey-customerAddress-by-streamid"))
-
-                .toTable(
-                        Materialized
-                                .<String, CustomerAddressStream>as(persistentKeyValueStore(CUSTOMER_ADDRESS_STREAM_KTABLE))
-                                .withKeySerde(Serdes.String())
-                                .withValueSerde(CUSTOMER_ADDRESS_STREAM_JSON_SERDE)
+                        artistTable,
+                        (stream, artist) -> new EnrichedStream(stream, artist),
+                        Joined.with(Serdes.String(), SERDE_STREAM_JSON, ARTISTS_JSON_SERDE)
                 );
-        customerAddressStreamKTable
-                .toStream()
-                .peek((key, value) -> log.info("Producing CustomerAddressStream to topic: key={}, value={}", key, value))
-                .to(CUSTOMER_ADDRESS_STREAM_KTABLE, Produced.with(Serdes.String(), CUSTOMER_ADDRESS_STREAM_JSON_SERDE));
 
-        //=============================
-        // builder
-        //=============================
-        builder
-                .stream(TOPIC_DATA_DEMO_ARTISTS, Consumed.with(Serdes.String(), SERDE_ARTIST_JSON))
-                .peek((artistId, artist) -> log.info("Artist Received: {}", artist))
-
-                .selectKey((artistId, artist) -> artist.id(), Named.as("rekey-ticket-by-artist"))
-                .peek((artistId, artist) -> log.info("Aritst with ArtistId '{}' registered with value '{}'",artistId, artist))
-
-                // Join to customerAddressStream. Causes a repartition
-                .join(
-                        customerAddressStreamKTable, // Join to table
-                        (artist, CustomerAddressStream) // Left value, right value
-                                -> new EnrichedStream(CustomerAddressStream.address, CustomerAddressStream.customer, CustomerAddressStream.stream, artist) // ValueJoiner
-                )
-                .peek((artistId, enrichedStream) -> log.info("Enriched Stream joined with id '{}' and value '{}'", artistId, enrichedStream))
-
-
-                .groupBy(
-                        (artistId, enrichedStream) -> enrichedStream.artist.name(),
-                        Grouped.with(Serdes.String(), ENRICHED_STREAM_JSON_SERDE)
-                )
-
-                .aggregate(
-                        SortedCounterMap::new,
-                        (artistId, enrichedStream, stateArtistCounts) -> {
-                            stateArtistCounts.incrementCount(enrichedStream.artist.name());
-                            return stateArtistCounts;
-                        },
-                        Materialized
-                                .<String, SortedCounterMap>as(persistentKeyValueStore("artist-stream-state-counts"))
-                                .withKeySerde(Serdes.String())
-                                .withValueSerde(COUNTER_MAP_JSON_SERDE)
-                )
-
-                // Turn it back into a stream to produce it to the output topic
-                .toStream()
-                .peek((artistId, sortedCounterMap) -> log.info("Aggregate sorted counter map created with Artist '{}' and value '{}'", artistId, sortedCounterMap))
-
-
-                .mapValues(sortedCounterMap -> sortedCounterMap.top(10))
-                .peek((key, counterMap) -> log.info("Venue {}'s 10 Top Selling Genres: {}", key, counterMap))
-
-                // Output to the output topic
-                .to(OUTPUT_TOPIC, Produced.with(Serdes.String(), LINKED_HASH_MAP_JSON_SERDE));
+        // Output to destination topic
+        enrichedStream
+                .peek((key, value) -> log.info("Enriched Stream: {}", value))
+                .to(OUTPUT_TOPIC, Produced.with(Serdes.String(), ENRICHED_STREAM_JSON_SERDE));
     }
 
     //===============================================================================================================
     // Data
     //===============================================================================================================
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class EnrichedStream {
+        public Stream stream;
+        public Artist artist;
+    }
+
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
     public static class CustomerAddress {
-        public Customer customer;
-        public Address address;
+        private Customer customer;
+        private Address address;
     }
 
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
     public static class CustomerAddressStream {
-        public Stream stream;
-        public Customer customer;
-        public Address address;
-    }
-
-    @Data
-    @NoArgsConstructor
-    @AllArgsConstructor
-    public static class EnrichedStream {
-        public Address address;
-        public Customer customer;
-        public Stream stream;
-        public Artist artist;
+        private CustomerAddress customerAddress;
+        private Stream stream;
     }
 
     //===============================================================================================================

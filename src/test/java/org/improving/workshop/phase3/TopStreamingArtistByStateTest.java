@@ -2,191 +2,267 @@ package org.improving.workshop.phase3;
 
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.common.serialization.Serdes;
-import org.apache.kafka.streams.*;
-import org.improving.workshop.Streams;
+import org.apache.kafka.streams.StreamsBuilder;
+import org.apache.kafka.streams.TestInputTopic;
+import org.apache.kafka.streams.TestOutputTopic;
+import org.apache.kafka.streams.TopologyTestDriver;
+import org.apache.kafka.streams.state.KeyValueStore;
+import org.apache.kafka.streams.test.TestRecord;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.msse.demo.mockdata.customer.address.Address;
-import org.msse.demo.mockdata.customer.profile.Customer;
 import org.msse.demo.mockdata.music.artist.Artist;
+import org.msse.demo.mockdata.music.artist.ArtistFaker;
 import org.msse.demo.mockdata.music.stream.Stream;
+import org.msse.demo.mockdata.music.stream.StreamFaker;
 
-import org.improving.workshop.phase3.TopStreamingArtistByState.*;
-import java.util.LinkedHashMap;
+import java.util.Properties;
+import java.util.UUID;
 
-import static org.improving.workshop.utils.DataFaker.*;
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.apache.kafka.streams.StreamsConfig.APPLICATION_ID_CONFIG;
+import static org.apache.kafka.streams.StreamsConfig.BOOTSTRAP_SERVERS_CONFIG;
+import static org.improving.workshop.Streams.SERDE_STREAM_JSON;
+import static org.improving.workshop.utils.DataFaker.ARTISTS;
+import static org.improving.workshop.utils.DataFaker.STREAMS;
+import static org.junit.jupiter.api.Assertions.*;
+
+//=====================================================================================
 
 @Slf4j
-class TopStreamingArtistByStateTest {
-    private TopologyTestDriver driver;
+public class TopStreamingArtistByStateTest {
+
+    private TopologyTestDriver testDriver;
+    private StreamsBuilder streamsBuilder;
     private TestInputTopic<String, Stream> streamInputTopic;
-    private TestInputTopic<String, Customer> customerInputTopic;
-    private TestInputTopic<String, Address> addressInputTopic;
     private TestInputTopic<String, Artist> artistInputTopic;
+    private TestOutputTopic<String, TopStreamingArtistByState.EnrichedStream> outputTopic;
+    private KeyValueStore<String, Stream> streamStore;
+    private KeyValueStore<String, Artist> artistStore;
+    private StreamFaker streamFaker;
+    private ArtistFaker artistFaker;
 
-    private TestOutputTopic<String, Address> addressKTable;
-    private TestOutputTopic<String, CustomerAddress> customerAddressKTable;
-    private TestOutputTopic<String, CustomerAddressStream> customerAddressStreamKTable;
-    private TestOutputTopic<String, LinkedHashMap<String, Long>> outputTopic;
-
-    // ====================================================================
+    //=====================================================================================
     // Before Each
-    // ====================================================================
-
+    //=====================================================================================
     @BeforeEach
     public void setup() {
-
-        StreamsBuilder streamsBuilder = new StreamsBuilder();
+        // Create the test topology
+        streamsBuilder = new StreamsBuilder();
         TopStreamingArtistByState.configureTopology(streamsBuilder);
 
-        driver = new TopologyTestDriver(streamsBuilder.build(), Streams.buildProperties());
+        // Configure the test driver
+        Properties props = new Properties();
+        props.put(APPLICATION_ID_CONFIG, "test-kafka-streams-" + UUID.randomUUID());
+        props.put(BOOTSTRAP_SERVERS_CONFIG, "dummy:1234");
 
-        artistInputTopic = driver.createInputTopic(
-                Streams.TOPIC_DATA_DEMO_ARTISTS,
+        testDriver = new TopologyTestDriver(streamsBuilder.build(), props);
+
+        // Create test topics
+        streamInputTopic = testDriver.createInputTopic(
+                TopStreamingArtistByState.STREAM_INPUT_TOPIC,
                 Serdes.String().serializer(),
-                Streams.SERDE_ARTIST_JSON.serializer()
+                SERDE_STREAM_JSON.serializer()
         );
 
-        customerInputTopic = driver.createInputTopic(
-                Streams.TOPIC_DATA_DEMO_CUSTOMERS,
+        artistInputTopic = testDriver.createInputTopic(
+                TopStreamingArtistByState.ARTIST_INPUT_TOPIC,
                 Serdes.String().serializer(),
-                Streams.SERDE_CUSTOMER_JSON.serializer()
+                TopStreamingArtistByState.ARTISTS_JSON_SERDE.serializer()
         );
 
-        addressInputTopic = driver.createInputTopic(
-                Streams.TOPIC_DATA_DEMO_ADDRESSES,
-                Serdes.String().serializer(),
-                Streams.SERDE_ADDRESS_JSON.serializer()
-        );
-
-        streamInputTopic = driver.createInputTopic(
-                Streams.TOPIC_DATA_DEMO_STREAMS,
-                Serdes.String().serializer(),
-                Streams.SERDE_STREAM_JSON.serializer()
-        );
-
-        addressKTable = driver.createOutputTopic(
-                TopStreamingArtistByState.ADDRESS_KTABLE,
-                Serdes.String().deserializer(),
-                Streams.SERDE_ADDRESS_JSON.deserializer()
-        );
-
-        customerAddressKTable = driver.createOutputTopic(
-                TopStreamingArtistByState.CUSTOMER_ADDRESS_KTABLE,
-                Serdes.String().deserializer(),
-                TopStreamingArtistByState.CUSTOMER_ADDRESS_JSON_SERDE.deserializer()
-        );
-
-        customerAddressStreamKTable = driver.createOutputTopic(
-                TopStreamingArtistByState.CUSTOMER_ADDRESS_STREAM_KTABLE,
-                Serdes.String().deserializer(),
-                TopStreamingArtistByState.CUSTOMER_ADDRESS_STREAM_JSON_SERDE.deserializer()
-        );
-
-
-        outputTopic = driver.createOutputTopic(
+        outputTopic = testDriver.createOutputTopic(
                 TopStreamingArtistByState.OUTPUT_TOPIC,
                 Serdes.String().deserializer(),
-                TopStreamingArtistByState.LINKED_HASH_MAP_JSON_SERDE.deserializer()
+                TopStreamingArtistByState.ENRICHED_STREAM_JSON_SERDE.deserializer()
+        );
+
+        // Get access to the state stores
+        streamStore = testDriver.getKeyValueStore(TopStreamingArtistByState.STREAM_KTABLE);
+        artistStore = testDriver.getKeyValueStore(TopStreamingArtistByState.ARTISTS_KTABLE);
+    }
+
+    //=====================================================================================
+    // After Each
+    //=====================================================================================
+
+    @AfterEach
+    public void tearDown() {
+        if (testDriver != null) {
+            testDriver.close();
+        }
+    }
+
+    // Helper method to generate a fake Stream object
+    private Stream generateStreamFake(String streamId, String customerId, String artistId) {
+        return new Stream(
+                streamId,
+                customerId,
+                artistId,
+                "2020"
         );
     }
 
-    // ====================================================================
-    // After Each
-    // ====================================================================
-
-    @AfterEach
-    public void cleanup() {
-        driver.close();
+    // Helper method to generate a fake Artist object
+    private Artist generateArtistFake(String artistId) {
+        return new Artist(
+                artistId,
+                "Artist Name " + artistId,
+                "Genre " + artistId
+        );
     }
 
-
-    // ====================================================================
-    // Test one
-    // ====================================================================
+    //=====================================================================================
+    // Test 1
+    //=====================================================================================
 
     @Test
-    @DisplayName("Check Address KTable Pipeline")
-    public void address_ktable_write_one_then_read_one() {
+    @DisplayName("Stream Table KTable Pipeline")
+    public void stream_write_one_then_read_one() {
         // ARRANGE
-        String addressId1 = "address-1";
-        Address address1 = ADDRESSES.generateCustomerAddress(addressId1);
-        log.info("Created Address with id '{}' and value '{}'", address1, addressId1);
+        String customerId = "customer-1";
+        String artistId = "artist-1";
 
-        // ACT - First batch of stream events
-        // Inputs
-        addressInputTopic.pipeInput(addressId1, address1);
-        // Outputs
-        KeyValue<String, Address> result = addressKTable.readKeyValue();
-        log.info("Output result has key '{}' and value '{}'", result.key, result.value);
 
-        // ASSERT - Verify initial top artists state
-        assertEquals(addressId1,result.key);
+        Stream stream = STREAMS.generate(customerId,artistId);
+        log.info("Created stream with id '{}' and value '{}'", stream.id(), stream);
+
+        Artist artist = ARTISTS.generate(artistId);
+        log.info("Created artist with id '{}' and value '{}'", artistId, artist);
+
+        // ACT - Input data
+        // Note: Order matters! Artist must be processed before stream to ensure the join works
+        artistInputTopic.pipeInput(artistId, artist);
+        streamInputTopic.pipeInput(stream.id(), stream);
+
+        // ASSERT - Verify stream is stored in KTable
+        Stream storedStream = streamStore.get(stream.id());
+        log.info("Stream from store has key '{}' and value '{}'", stream.id(), storedStream);
+        assertNotNull(storedStream, "Stream should be stored in KTable");
+        assertEquals(stream.id(), storedStream.id());
+
+        // Verify artist is stored in KTable
+        Artist storedArtist = artistStore.get(artistId);
+        log.info("Artist from store has key '{}' and value '{}'", artistId, storedArtist);
+        assertNotNull(storedArtist, "Artist should be stored in KTable");
+        assertEquals(artistId, storedArtist.id());
+
+        // Verify enriched output
+        TestRecord<String, TopStreamingArtistByState.EnrichedStream> result = outputTopic.readRecord();
+        log.info("Output result has key '{}' and value '{}'", result.key(), result.value());
+
+        // ASSERT - Verify result
+        assertEquals(artistId, result.key());
+        assertNotNull(result.value(), "Enriched stream should not be null");
+        assertEquals(stream.id(), result.value().getStream().id());
+        assertEquals(artist.id(), result.value().getArtist().id());
     }
 
-    // ====================================================================
-    // Test Two
-    // ====================================================================
+    //=====================================================================================
+    // Test 2
+    //=====================================================================================
 
     @Test
-    @DisplayName("Check CustomerAddress KTable Pipeline")
-    public void customer_address_ktable_write_one_then_read_one() {
+    @DisplayName("Multiple Streams with the Same Artist")
+    public void multiple_streams_same_artist() {
         // ARRANGE
-        String addressId1 = "address-1";
-        Address address1 = ADDRESSES.generateCustomerAddress(addressId1);
-        log.info("Created Address with id '{}' and value '{}'", address1, addressId1);
+        String artistId = "artist-2";
+        Artist artist = ARTISTS.generate(artistId);
 
-        String customerID1 = "customer-1";
-        Customer customer1 = CUSTOMERS.generate(customerID1);
-        log.info("Created Customer with id '{}' and value '{}'", customer1, customerID1);
+        String streamId1 = "stream-2a";
+        String streamId2 = "stream-2b";
+        String customerId1 = "customer-2a";
+        String customerId2 = "customer-2b";
 
+        Stream stream1 = STREAMS.generate(customerId1,artistId);
+        Stream stream2 = STREAMS.generate(customerId2,artistId);
 
-        // ACT - First batch of stream events
-        // Inputs
-        addressInputTopic.pipeInput(addressId1,address1);
-        customerInputTopic.pipeInput(customerID1, customer1);
+        // ACT - Input data
+        artistInputTopic.pipeInput(artistId, artist);
+        streamInputTopic.pipeInput(streamId1, stream1);
+        streamInputTopic.pipeInput(streamId2, stream2);
 
-        // Outputs
-        KeyValue<String, Address> result = addressKTable.readKeyValue();
+        // ASSERT - Verify output records
+        TestRecord<String, TopStreamingArtistByState.EnrichedStream> result1 = outputTopic.readRecord();
+        assertEquals(artistId, result1.key());
+        assertEquals(stream1.id(), result1.value().getStream().id());
 
-        // ASSERT - Verify initial top artists state
-        assertEquals(addressId1,result.key);
+        TestRecord<String, TopStreamingArtistByState.EnrichedStream> result2 = outputTopic.readRecord();
+        assertEquals(artistId, result2.key());
+        assertEquals(stream2.id(), result2.value().getStream().id());
+
+        assertEquals(0, outputTopic.getQueueSize());
     }
 
-    // ====================================================================
-    // Test Three
-    // ====================================================================
-//    @Test
-//    @DisplayName("Check CustomerAddress KTable Pipeline")
-//    public void customer_address_stream_ktable_write_one_then_read_one() {
-//        // ARRANGE
-//        String addressId1 = "address-1";
-//        Address address1 = ADDRESSES.generateCustomerAddress(addressId1);
-//        log.info("Created Address with id '{}' and value '{}'", address1, addressId1);
-//
-//        String customerID1 = "customer-1";
-//        Customer customer1 = CUSTOMERS.generate(customerID1);
-//        log.info("Created Customer with id '{}' and value '{}'", customer1, customerID1);
-//
-//        String streamID1 = "stream-1";
-//        String artistID1 = "artist-1";
-//        Stream stream1 = STREAMS.generate(customerID1,artistID1);
-//        log.info("Created Stream with id '{}' and value '{}'", stream1,streamID1);
-//
-//
-//        // ACT - First batch of stream events
-//        // Inputs
-//        addressInputTopic.pipeInput(addressId1,address1);
-//        customerInputTopic.pipeInput(customerID1, customer1);
-//        streamInputTopic.pipeInput(streamID1,stream1);
-//
-//        // Outputs
-//        KeyValue<String, CustomerAddressStream> result = customerAddressStreamKTable.readKeyValue();
-//
-//        // ASSERT - Verify initial top artists state
-//        assertEquals(addressId1,result.key);
-//    }
+
+    //=====================================================================================
+    // Test 3
+    //=====================================================================================
+
+    @Test
+    @DisplayName("Multiple Streams with Multiple Artists")
+    public void multiple_streams_multiple_artists() {
+        // ARRANGE
+        // First artist and associated streams
+        String artistId1 = "artist-3a";
+        Artist artist1 = ARTISTS.generate(artistId1);
+
+        String streamId1 = "stream-3a";
+        String streamId2 = "stream-3b";
+        String customerId1 = "customer-3a";
+        String customerId2 = "customer-3b";
+
+        Stream stream1 = STREAMS.generate(customerId1, artistId1);
+        Stream stream2 = STREAMS.generate(customerId2, artistId1);
+
+        // Second artist and associated streams
+        String artistId2 = "artist-3c";
+        Artist artist2 = ARTISTS.generate(artistId2);
+
+        String streamId3 = "stream-3c";
+        String streamId4 = "stream-3d";
+        String customerId3 = "customer-3c";
+        String customerId4 = "customer-3d";
+
+        Stream stream3 = STREAMS.generate(customerId3, artistId2);
+        Stream stream4 = STREAMS.generate(customerId4, artistId2);
+
+        // ACT - Input data
+        // Add artists first
+        artistInputTopic.pipeInput(artistId1, artist1);
+        artistInputTopic.pipeInput(artistId2, artist2);
+
+        // Add streams
+        streamInputTopic.pipeInput(streamId1, stream1);
+        streamInputTopic.pipeInput(streamId2, stream2);
+        streamInputTopic.pipeInput(streamId3, stream3);
+        streamInputTopic.pipeInput(streamId4, stream4);
+
+        // ASSERT - Verify output records
+        // Validate the stream1 record
+        TestRecord<String, TopStreamingArtistByState.EnrichedStream> result1 = outputTopic.readRecord();
+        assertEquals(artistId1, result1.key());
+        assertEquals(stream1.id(), result1.value().getStream().id());
+        assertEquals(artist1.id(), result1.value().getArtist().id());
+
+        // Validate the stream2 record
+        TestRecord<String, TopStreamingArtistByState.EnrichedStream> result2 = outputTopic.readRecord();
+        assertEquals(artistId1, result2.key());
+        assertEquals(stream2.id(), result2.value().getStream().id());
+        assertEquals(artist1.id(), result2.value().getArtist().id());
+
+        // Validate the stream3 record
+        TestRecord<String, TopStreamingArtistByState.EnrichedStream> result3 = outputTopic.readRecord();
+        assertEquals(artistId2, result3.key());
+        assertEquals(stream3.id(), result3.value().getStream().id());
+        assertEquals(artist2.id(), result3.value().getArtist().id());
+
+        // Validate the stream4 record
+        TestRecord<String, TopStreamingArtistByState.EnrichedStream> result4 = outputTopic.readRecord();
+        assertEquals(artistId2, result4.key());
+        assertEquals(stream4.id(), result4.value().getStream().id());
+        assertEquals(artist2.id(), result4.value().getArtist().id());
+
+        assertEquals(0, outputTopic.getQueueSize());
+    }
 }
