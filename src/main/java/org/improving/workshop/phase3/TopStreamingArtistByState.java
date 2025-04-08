@@ -40,6 +40,7 @@ public class TopStreamingArtistByState {
 
     // KTABLE DEFINITIONS MUST BE PREFIXED WITH "kafka-workshop-"
     public static final String ADDRESS_KTABLE = "kafka-workshop-address-ktable";
+    public static final String STREAMS_KTABLE = "kafka-workshop-streams-ktable";
     public static final String CUSTOMER_ADDRESS_KTABLE = "kafka-workshop-customer-address-ktable";
     public static final String CUSTOMER_ADDRESS_STREAM_KTABLE = "kafka-workshop-customer-address-stream-ktable";
     public static final String OUTPUT_TOPIC = "kafka-workshop-top-streaming-artist-by-state";
@@ -83,6 +84,7 @@ public class TopStreamingArtistByState {
         //======================
         // KTables
         //=======================
+
         //
         // Address
         //

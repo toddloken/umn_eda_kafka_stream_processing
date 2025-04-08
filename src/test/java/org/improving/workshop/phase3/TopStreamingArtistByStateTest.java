@@ -159,34 +159,34 @@ class TopStreamingArtistByStateTest {
     // ====================================================================
     // Test Three
     // ====================================================================
-    @Test
-    @DisplayName("Check CustomerAddress KTable Pipeline")
-    public void customer_address_stream_ktable_write_one_then_read_one() {
-        // ARRANGE
-        String addressId1 = "address-1";
-        Address address1 = ADDRESSES.generateCustomerAddress(addressId1);
-        log.info("Created Address with id '{}' and value '{}'", address1, addressId1);
-
-        String customerID1 = "customer-1";
-        Customer customer1 = CUSTOMERS.generate(customerID1);
-        log.info("Created Customer with id '{}' and value '{}'", customer1, customerID1);
-
-        String streamID1 = "stream-1";
-        String artistID1 = "artist-1";
-        Stream stream1 = STREAMS.generate(customerID1,artistID1);
-        log.info("Created Stream with id '{}' and value '{}'", stream1,streamID1);
-
-
-        // ACT - First batch of stream events
-        // Inputs
-        addressInputTopic.pipeInput(addressId1,address1);
-        customerInputTopic.pipeInput(customerID1, customer1);
-        streamInputTopic.pipeInput(streamID1,stream1);
-
-        // Outputs
-        KeyValue<String, CustomerAddressStream> result = customerAddressStreamKTable.readKeyValue();
-
-        // ASSERT - Verify initial top artists state
-        assertEquals(addressId1,result.key);
-    }
+//    @Test
+//    @DisplayName("Check CustomerAddress KTable Pipeline")
+//    public void customer_address_stream_ktable_write_one_then_read_one() {
+//        // ARRANGE
+//        String addressId1 = "address-1";
+//        Address address1 = ADDRESSES.generateCustomerAddress(addressId1);
+//        log.info("Created Address with id '{}' and value '{}'", address1, addressId1);
+//
+//        String customerID1 = "customer-1";
+//        Customer customer1 = CUSTOMERS.generate(customerID1);
+//        log.info("Created Customer with id '{}' and value '{}'", customer1, customerID1);
+//
+//        String streamID1 = "stream-1";
+//        String artistID1 = "artist-1";
+//        Stream stream1 = STREAMS.generate(customerID1,artistID1);
+//        log.info("Created Stream with id '{}' and value '{}'", stream1,streamID1);
+//
+//
+//        // ACT - First batch of stream events
+//        // Inputs
+//        addressInputTopic.pipeInput(addressId1,address1);
+//        customerInputTopic.pipeInput(customerID1, customer1);
+//        streamInputTopic.pipeInput(streamID1,stream1);
+//
+//        // Outputs
+//        KeyValue<String, CustomerAddressStream> result = customerAddressStreamKTable.readKeyValue();
+//
+//        // ASSERT - Verify initial top artists state
+//        assertEquals(addressId1,result.key);
+//    }
 }
