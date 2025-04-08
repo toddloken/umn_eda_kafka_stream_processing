@@ -99,6 +99,7 @@ public class TopStreamingArtistByState {
                 .peek((key, artist) -> log.info("Address '{}' registered with value '{}'", key, artist))
                 .to(ADDRESS_KTABLE, Produced.with(Serdes.String(), SERDE_ADDRESS_JSON));
 
+
         //
         // CustomerAddress
         //
@@ -162,8 +163,8 @@ public class TopStreamingArtistByState {
                 );
         customerAddressStreamKTable
                 .toStream()
-                .peek((key, customerAddressStream) -> log.info("CustomerAddressStream '{}' registered with value '{}'", key, customerAddressStream))
-                .to(CUSTOMER_ADDRESS_STREAM_KTABLE, Produced.with(Serdes.String(),CUSTOMER_ADDRESS_STREAM_JSON_SERDE));
+                .peek((key, value) -> log.info("Producing CustomerAddressStream to topic: key={}, value={}", key, value))
+                .to(CUSTOMER_ADDRESS_STREAM_KTABLE, Produced.with(Serdes.String(), CUSTOMER_ADDRESS_STREAM_JSON_SERDE));
 
         //=============================
         // builder
