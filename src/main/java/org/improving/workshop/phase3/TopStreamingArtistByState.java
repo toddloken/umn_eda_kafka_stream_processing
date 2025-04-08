@@ -189,7 +189,7 @@ public class TopStreamingArtistByState {
                         Grouped.with(Serdes.String(), ENRICHED_STREAM_JSON_SERDE)
                 )
 
-               .aggregate(
+                .aggregate(
                         SortedCounterMap::new,
                         (artistId, enrichedStream, stateArtistCounts) -> {
                             stateArtistCounts.incrementCount(enrichedStream.artist.name());
