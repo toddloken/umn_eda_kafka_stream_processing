@@ -15,9 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.msse.demo.mockdata.customer.address.Address;
 import org.msse.demo.mockdata.customer.profile.Customer;
 import org.msse.demo.mockdata.music.artist.Artist;
-import org.msse.demo.mockdata.music.artist.ArtistFaker;
 import org.msse.demo.mockdata.music.stream.Stream;
-import org.msse.demo.mockdata.music.stream.StreamFaker;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -45,8 +43,8 @@ public class TopStreamingArtistByStateTest {
     private TestOutputTopic<String, TopStreamingArtistByState.EnrichedStream> outputTopic;
     private KeyValueStore<String, Stream> streamStore;
     private KeyValueStore<String, Artist> artistStore;
-    private StreamFaker streamFaker;
-    private ArtistFaker artistFaker;
+//    private StreamFaker streamFaker;
+//    private ArtistFaker artistFaker;
 
     private TestInputTopic<String, Address> addressInputTopic;
     private TestOutputTopic<String, TopStreamingArtistByState.EnrichedArtistAddressStream> enrichedArtistAddressTopic;
