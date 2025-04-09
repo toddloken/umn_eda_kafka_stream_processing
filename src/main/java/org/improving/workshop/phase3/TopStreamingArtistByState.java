@@ -8,8 +8,11 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.common.utils.Bytes;
+import org.apache.kafka.streams.KeyValue;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.kstream.*;
+import org.apache.kafka.streams.state.KeyValueStore;
 import org.msse.demo.mockdata.customer.address.Address;
 import org.msse.demo.mockdata.customer.profile.Customer;
 import org.msse.demo.mockdata.music.artist.Artist;
@@ -51,12 +54,16 @@ public class TopStreamingArtistByState {
     public static final String OUTPUT_TOPIC = "kafka-workshop-top-streaming-artist-by-state";
     public static final String ENRICHED_ARTIST_CUSTOMER_STREAM_TOPIC = "kafka-workshop-enriched-artist-customer-stream";
     public static final String ENRICHED_ARTIST_ADDRESS_STREAM_TOPIC = "kafka-workshop-enriched-artist-address-stream";
+    public static final String ARTIST_STATE_STREAM_COUNT_TOPIC = "kafka-workshop-artist-state-stream-count";
 
     // Serdes
 
     // Define new Serde for the enriched artist customer stream
     public static final JsonSerde<EnrichedArtistCustomerStream> ENRICHED_ARTIST_CUSTOMER_STREAM_JSON_SERDE =
             new JsonSerde<>(EnrichedArtistCustomerStream.class);
+
+    public static final JsonSerde<ArtistStateStreamCount> ARTIST_STATE_STREAM_COUNT_JSON_SERDE =
+            new JsonSerde<>(ArtistStateStreamCount.class);
 
     public static final JsonSerde<Artist> ARTISTS_JSON_SERDE = new JsonSerde<>(Artist.class);
     public static final JsonSerde<Address> SERDE_ADDRESS_JSON = new JsonSerde<>(Address.class);
@@ -96,7 +103,6 @@ public class TopStreamingArtistByState {
     static void configureTopology(final StreamsBuilder builder) {
         // KTables
         //
-
         KTable<String, Stream> streamTable = builder
                 .table(
                         STREAM_INPUT_TOPIC,
@@ -204,11 +210,47 @@ public class TopStreamingArtistByState {
         enrichedArtistAddressStream
                 .peek((key, value) -> log.info("Enriched Artist Address Stream: {}", value))
                 .to(ENRICHED_ARTIST_ADDRESS_STREAM_TOPIC, Produced.with(Serdes.String(), ENRICHED_ARTIST_ADDRESS_STREAM_JSON_SERDE));
+
+        // Create an aggregation for artist-state-stream counts
+        enrichedArtistAddressStream
+                .map((key, value) -> {
+                    String artistId = value.getEnrichedStream().getArtist().id();
+                    String artistName = value.getEnrichedStream().getArtist().name();
+                    String state = value.getAddress().state();
+                    // Create a composite key of artistId-state
+                    String compositeKey = artistId + "-" + state;
+                    return KeyValue.pair(compositeKey, new ArtistStateStreamCount(artistId, artistName, state, 1L));
+                })
+                .groupByKey(Grouped.with(Serdes.String(), ARTIST_STATE_STREAM_COUNT_JSON_SERDE))
+                .reduce(
+                        // When we get a new record for the same artist-state, increment the count
+                        (aggValue, newValue) -> {
+                            aggValue.setCount(aggValue.getCount() + 1);
+                            return aggValue;
+                        },
+                        Materialized.<String, ArtistStateStreamCount, KeyValueStore<Bytes, byte[]>>as("artist-state-stream-count-store")
+                                .withKeySerde(Serdes.String())
+                                .withValueSerde(ARTIST_STATE_STREAM_COUNT_JSON_SERDE)
+                )
+                .toStream()
+                .peek((key, value) -> log.info("Artist-State Stream Count: {} - {} in {} has {} streams",
+                        value.getArtistId(), value.getArtistName(), value.getState(), value.getCount()))
+                .to(ARTIST_STATE_STREAM_COUNT_TOPIC, Produced.with(Serdes.String(), ARTIST_STATE_STREAM_COUNT_JSON_SERDE));
     }
 
     //===============================================================================================================
     // Data
     //===============================================================================================================
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ArtistStateStreamCount {
+        private String artistId;
+        private String artistName;
+        private String state;
+        private long count;
+    }
 
     @Data
     @NoArgsConstructor
@@ -220,10 +262,10 @@ public class TopStreamingArtistByState {
 
 
 
-        @Data
-        @NoArgsConstructor
-        @AllArgsConstructor
-        public static class EnrichedArtistCustomerStream {
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class EnrichedArtistCustomerStream {
         private EnrichedStream enrichedStream;
         private Customer customer;
     }
