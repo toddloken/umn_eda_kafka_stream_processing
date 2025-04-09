@@ -19,6 +19,8 @@ import org.msse.demo.mockdata.music.artist.ArtistFaker;
 import org.msse.demo.mockdata.music.stream.Stream;
 import org.msse.demo.mockdata.music.stream.StreamFaker;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
 
@@ -48,6 +50,7 @@ public class TopStreamingArtistByStateTest {
 
     private TestInputTopic<String, Address> addressInputTopic;
     private TestOutputTopic<String, TopStreamingArtistByState.EnrichedArtistAddressStream> enrichedArtistAddressTopic;
+    private TestOutputTopic<String, TopStreamingArtistByState.ArtistStateStreamCount> artistStateStreamCountTopic;
 
     //=====================================================================================
     // Before Each
@@ -100,6 +103,12 @@ public class TopStreamingArtistByStateTest {
                 TopStreamingArtistByState.ENRICHED_ARTIST_ADDRESS_STREAM_TOPIC,
                 Serdes.String().deserializer(),
                 TopStreamingArtistByState.ENRICHED_ARTIST_ADDRESS_STREAM_JSON_SERDE.deserializer()
+        );
+
+        artistStateStreamCountTopic = testDriver.createOutputTopic(
+                TopStreamingArtistByState.ARTIST_STATE_STREAM_COUNT_TOPIC,
+                Serdes.String().deserializer(),
+                TopStreamingArtistByState.ARTIST_STATE_STREAM_COUNT_JSON_SERDE.deserializer()
         );
 
         outputTopic = testDriver.createOutputTopic(
@@ -567,6 +576,242 @@ public class TopStreamingArtistByStateTest {
         assertEquals(0, enrichedArtistAddressTopic.getQueueSize());
     }
 
+    //=====================================================================================
+    // Test 6
+    //=====================================================================================
+    @Test
+    @DisplayName("Single Stream with Artist and State Count")
+    public void single_stream_artist_state_count() {
+        // ARRANGE
+        String artistId = "artist-5a";
+        String artistName = "Test Artist";
+        Artist artist = ARTISTS.generate(artistId);
+        artistName = artist.name();
 
+
+        String streamId = "stream-5a";
+        String customerId = "customer-5a";
+
+        Stream stream = STREAMS.generate(customerId, artistId);
+
+        // Customer
+        Customer customer = CUSTOMERS.generate(customerId);
+
+        // Address with specific state for testing
+        String state = "CA";
+        Address address = ADDRESSES.generateCustomerAddress(customerId, state);
+        state = address.state();
+
+
+        // ACT - Input data
+        // Add artist first
+        artistInputTopic.pipeInput(artistId, artist);
+
+        // Add customer
+        customerInputTopic.pipeInput(customerId, customer);
+
+        // Add address
+        addressInputTopic.pipeInput(customerId, address);
+
+        // Add stream
+        streamInputTopic.pipeInput(streamId, stream);
+
+        // Process the original enriched stream outputs (consume them so we can get to the aggregate)
+        outputTopic.readRecord();
+        enrichedArtistCustomerTopic.readRecord();
+        enrichedArtistAddressTopic.readRecord();
+
+        // ASSERT - Verify output record for artist-state-stream count
+        TestRecord<String, TopStreamingArtistByState.ArtistStateStreamCount> countResult =
+                artistStateStreamCountTopic.readRecord();
+
+        // The key should be a composite of artistId-state
+        String expectedKey = artistId + "-" + state;
+        assertEquals(expectedKey, countResult.key());
+
+        // Verify the count record fields
+        assertEquals(artistId, countResult.value().getArtistId());
+        assertEquals(artistName, countResult.value().getArtistName());
+        assertEquals(state, countResult.value().getState());
+        assertEquals(1L, countResult.value().getCount());
+
+        assertEquals(0, artistStateStreamCountTopic.getQueueSize());
+    }
+
+    //=====================================================================================
+    // Test 7
+    //=====================================================================================
+
+    @Test
+    @DisplayName("Multiple Streams with Multiple Artists and States Count")
+    public void multiple_streams_artists_states_count() {
+        // ARRANGE - Set up test data for multiple artists and states
+        // Define test artists
+        String[] artistIds = {"artist-1", "artist-2", "artist-3"};
+        Artist[] artists = new Artist[artistIds.length];
+        String[] artistNames = new String[artistIds.length];
+
+        // Generate artists
+        for (int i = 0; i < artistIds.length; i++) {
+            artists[i] = ARTISTS.generate(artistIds[i]);
+            artistNames[i] = artists[i].name();
+        }
+
+        // Define requested states for customers
+        String[] requestedStates = {"CA", "CA", "NY", "TX", "FL", "NY"};
+
+        // Define customers for different states
+        String[] customerIds = {"customer-ca1", "customer-ca2", "customer-ny1",
+                "customer-tx1", "customer-fl1", "customer-ny2"};
+        Customer[] customers = new Customer[customerIds.length];
+        Address[] addresses = new Address[customerIds.length];
+        String[] actualStates = new String[customerIds.length];
+
+        // Generate customers and their addresses - get actual states from address objects
+        for (int i = 0; i < customerIds.length; i++) {
+            customers[i] = CUSTOMERS.generate(customerIds[i]);
+            // Generate address with requested state
+            addresses[i] = ADDRESSES.generateCustomerAddress(customerIds[i], requestedStates[i]);
+            // Get the actual state from the address
+            actualStates[i] = addresses[i].state();
+        }
+
+        // Create multiple streams with different combinations
+        // Format: streamId, customerId, artistId
+        String[][] streamData = {
+                {"stream-1", customerIds[0], artistIds[0]}, // customer-ca1, artist-1
+                {"stream-2", customerIds[1], artistIds[0]}, // customer-ca2, artist-1
+                {"stream-3", customerIds[2], artistIds[1]}, // customer-ny1, artist-2
+                {"stream-4", customerIds[3], artistIds[1]}, // customer-tx1, artist-2
+                {"stream-5", customerIds[4], artistIds[2]}, // customer-fl1, artist-3
+                {"stream-6", customerIds[5], artistIds[0]}, // customer-ny2, artist-1
+                {"stream-7", customerIds[0], artistIds[2]}, // customer-ca1, artist-3
+                {"stream-8", customerIds[2], artistIds[2]}  // customer-ny1, artist-3
+        };
+
+        Stream[] streams = new Stream[streamData.length];
+        for (int i = 0; i < streamData.length; i++) {
+            streams[i] = STREAMS.generate(streamData[i][1], streamData[i][2]);
+        }
+
+        // ACT - Add all test data to topics
+
+        // Add all artists first
+        for (int i = 0; i < artists.length; i++) {
+            artistInputTopic.pipeInput(artistIds[i], artists[i]);
+        }
+
+        // Add all customers
+        for (int i = 0; i < customers.length; i++) {
+            customerInputTopic.pipeInput(customerIds[i], customers[i]);
+        }
+
+        // Add all addresses
+        for (int i = 0; i < addresses.length; i++) {
+            addressInputTopic.pipeInput(customerIds[i], addresses[i]);
+        }
+
+        // Add all streams
+        for (int i = 0; i < streams.length; i++) {
+            streamInputTopic.pipeInput(streamData[i][0], streams[i]);
+
+            // Process the enriched stream outputs for each stream
+            outputTopic.readRecord();
+            enrichedArtistCustomerTopic.readRecord();
+            enrichedArtistAddressTopic.readRecord();
+        }
+
+        // Build expected counts based on actual states returned by addresses
+        Map<String, Map<String, Long>> artistStateCounts = new HashMap<>();
+
+        // Initialize the artist-state count map
+        for (String artistId : artistIds) {
+            artistStateCounts.put(artistId, new HashMap<>());
+        }
+
+        // Count streams by artist and state
+        for (String[] stream : streamData) {
+            String customerId = stream[1];
+            String artistId = stream[2];
+
+            // Find the customer index to get the actual state
+            int customerIndex = -1;
+            for (int i = 0; i < customerIds.length; i++) {
+                if (customerIds[i].equals(customerId)) {
+                    customerIndex = i;
+                    break;
+                }
+            }
+
+            if (customerIndex >= 0) {
+                String state = actualStates[customerIndex];
+                Map<String, Long> stateCounts = artistStateCounts.get(artistId);
+                stateCounts.put(state, stateCounts.getOrDefault(state, 0L) + 1L);
+            }
+        }
+
+        // Create a map to store expected results: key=artistId-state, value=[artistName, count]
+        Map<String, Object[]> expectedResults = new HashMap<>();
+
+        // Build expected results from the counts
+        for (String artistId : artistIds) {
+            int artistIndex = -1;
+            for (int i = 0; i < artistIds.length; i++) {
+                if (artistIds[i].equals(artistId)) {
+                    artistIndex = i;
+                    break;
+                }
+            }
+
+            Map<String, Long> stateCounts = artistStateCounts.get(artistId);
+            for (Map.Entry<String, Long> entry : stateCounts.entrySet()) {
+                String state = entry.getKey();
+                Long count = entry.getValue();
+                expectedResults.put(artistId + "-" + state,
+                        new Object[]{artistNames[artistIndex], count});
+            }
+        }
+
+        // Read all the results from the topic
+        int expectedRecordCount = expectedResults.size();
+        for (int i = 0; i < expectedRecordCount; i++) {
+            TestRecord<String, TopStreamingArtistByState.ArtistStateStreamCount> countResult =
+                    artistStateStreamCountTopic.readRecord();
+
+            String key = countResult.key();
+            TopStreamingArtistByState.ArtistStateStreamCount value = countResult.value();
+
+            // Verify this record matches our expectations
+            assertEquals(true, expectedResults.containsKey(key),
+                    "Unexpected key found: " + key);
+
+            Object[] expected = expectedResults.get(key);
+            assertEquals(expected[0], value.getArtistName(),
+                    "Artist name mismatch for key: " + key);
+            assertEquals(expected[1], value.getCount(),
+                    "Count mismatch for key: " + key);
+
+            // Extract artistId and state from composite key
+            // The key format is: "artistId-state" but artistId itself contains a hyphen
+            // Find the last hyphen in the string to separate artistId and state
+            int lastHyphenIndex = key.lastIndexOf("-");
+            String artistId = key.substring(0, lastHyphenIndex);
+            String state = key.substring(lastHyphenIndex + 1);
+
+            // Verify the individual components
+            assertEquals(artistId, value.getArtistId());
+            assertEquals(state, value.getState());
+
+            // Remove the verified entry to ensure we don't count it twice
+            expectedResults.remove(key);
+        }
+
+        // Verify we've processed all expected records
+        assertEquals(true, expectedResults.isEmpty(),
+                "Not all expected combinations were found: " + expectedResults.keySet());
+
+        // Verify there are no more records in the topic
+        assertEquals(0, artistStateStreamCountTopic.getQueueSize());
+    }
 
 }
