@@ -50,6 +50,7 @@ public class TopStreamingArtistByState {
     public static final String CUSTOMER_ADDRESS_STREAM_KTABLE = "kafka-workshop-customer-address-stream-ktable";
     public static final String OUTPUT_TOPIC = "kafka-workshop-top-streaming-artist-by-state";
     public static final String ENRICHED_ARTIST_CUSTOMER_STREAM_TOPIC = "kafka-workshop-enriched-artist-customer-stream";
+    public static final String ENRICHED_ARTIST_ADDRESS_STREAM_TOPIC = "kafka-workshop-enriched-artist-address-stream";
 
     // Serdes
 
@@ -58,9 +59,12 @@ public class TopStreamingArtistByState {
             new JsonSerde<>(EnrichedArtistCustomerStream.class);
 
     public static final JsonSerde<Artist> ARTISTS_JSON_SERDE = new JsonSerde<>(Artist.class);
+    public static final JsonSerde<Address> SERDE_ADDRESS_JSON = new JsonSerde<>(Address.class);
     public static final JsonSerde<CustomerAddress> CUSTOMER_ADDRESS_JSON_SERDE = new JsonSerde<>(CustomerAddress.class);
     public static final JsonSerde<CustomerAddressStream> CUSTOMER_ADDRESS_STREAM_JSON_SERDE = new JsonSerde<>(CustomerAddressStream.class);
     public static final JsonSerde<EnrichedStream> ENRICHED_STREAM_JSON_SERDE = new JsonSerde<>(EnrichedStream.class);
+    public static final JsonSerde<EnrichedArtistAddressStream> ENRICHED_ARTIST_ADDRESS_STREAM_JSON_SERDE =
+            new JsonSerde<>(EnrichedArtistAddressStream.class);
     public static final JsonSerde<SortedCounterMap> COUNTER_MAP_JSON_SERDE = new JsonSerde<>(SortedCounterMap.class);
 
     public static final JsonSerde<LinkedHashMap<String, Long>> LINKED_HASH_MAP_JSON_SERDE
@@ -92,8 +96,7 @@ public class TopStreamingArtistByState {
     static void configureTopology(final StreamsBuilder builder) {
         // KTables
         //
-        // Streams
-        //
+
         KTable<String, Stream> streamTable = builder
                 .table(
                         STREAM_INPUT_TOPIC,
@@ -138,6 +141,21 @@ public class TopStreamingArtistByState {
                 .peek((key, customer) -> log.info("Customer '{}' registered with value '{}'", key, customer))
                 .to("kafka-workshop-customer-ktable", Produced.with(Serdes.String(), SERDE_CUSTOMER_JSON));
 
+        // Add Address KTable
+        KTable<String, Address> addressTable = builder
+                .table(
+                        ADDRESS_INPUT_TOPIC,
+                        Materialized
+                                .<String, Address>as(persistentKeyValueStore(ADDRESS_KTABLE))
+                                .withKeySerde(Serdes.String())
+                                .withValueSerde(SERDE_ADDRESS_JSON)
+                );
+
+        addressTable
+                .toStream()
+                .peek((key, address) -> log.info("Address '{}' registered with value '{}'", key, address))
+                .to(ADDRESS_KTABLE, Produced.with(Serdes.String(), SERDE_ADDRESS_JSON));
+
         // Stream table needs to be keyed by artistid to join with artist table
         KStream<String, Stream> streamByArtistId = streamTable
                 .toStream()
@@ -172,12 +190,35 @@ public class TopStreamingArtistByState {
         // Output the enriched artist customer stream to a new topic
         enrichedArtistCustomerStream
                 .peek((key, value) -> log.info("Enriched Artist Customer Stream: {}", value))
-                .to("kafka-workshop-enriched-artist-customer-stream", Produced.with(Serdes.String(), ENRICHED_ARTIST_CUSTOMER_STREAM_JSON_SERDE));
+                .to(ENRICHED_ARTIST_CUSTOMER_STREAM_TOPIC, Produced.with(Serdes.String(), ENRICHED_ARTIST_CUSTOMER_STREAM_JSON_SERDE));
+
+        // Join with address table to create an enriched artist address stream
+        KStream<String, EnrichedArtistAddressStream> enrichedArtistAddressStream = enrichedStreamByCustomerId
+                .join(
+                        addressTable,
+                        (enrichedStreamValue, address) -> new EnrichedArtistAddressStream(enrichedStreamValue, address),
+                        Joined.with(Serdes.String(), ENRICHED_STREAM_JSON_SERDE, SERDE_ADDRESS_JSON)
+                );
+
+        // Output the enriched artist address stream to a new topic
+        enrichedArtistAddressStream
+                .peek((key, value) -> log.info("Enriched Artist Address Stream: {}", value))
+                .to(ENRICHED_ARTIST_ADDRESS_STREAM_TOPIC, Produced.with(Serdes.String(), ENRICHED_ARTIST_ADDRESS_STREAM_JSON_SERDE));
     }
 
     //===============================================================================================================
     // Data
     //===============================================================================================================
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class EnrichedArtistAddressStream {
+        private EnrichedStream enrichedStream;
+        private Address address;
+    }
+
+
 
         @Data
         @NoArgsConstructor

@@ -12,6 +12,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.msse.demo.mockdata.customer.address.Address;
 import org.msse.demo.mockdata.customer.profile.Customer;
 import org.msse.demo.mockdata.music.artist.Artist;
 import org.msse.demo.mockdata.music.artist.ArtistFaker;
@@ -24,9 +25,7 @@ import java.util.UUID;
 import static org.apache.kafka.streams.StreamsConfig.APPLICATION_ID_CONFIG;
 import static org.apache.kafka.streams.StreamsConfig.BOOTSTRAP_SERVERS_CONFIG;
 import static org.improving.workshop.Streams.SERDE_STREAM_JSON;
-import static org.improving.workshop.utils.DataFaker.ARTISTS;
-import static org.improving.workshop.utils.DataFaker.STREAMS;
-import static org.improving.workshop.utils.DataFaker.CUSTOMERS;
+import static org.improving.workshop.utils.DataFaker.*;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
@@ -46,6 +45,9 @@ public class TopStreamingArtistByStateTest {
     private KeyValueStore<String, Artist> artistStore;
     private StreamFaker streamFaker;
     private ArtistFaker artistFaker;
+
+    private TestInputTopic<String, Address> addressInputTopic;
+    private TestOutputTopic<String, TopStreamingArtistByState.EnrichedArtistAddressStream> enrichedArtistAddressTopic;
 
     //=====================================================================================
     // Before Each
@@ -86,6 +88,18 @@ public class TopStreamingArtistByStateTest {
                 TopStreamingArtistByState.ENRICHED_ARTIST_CUSTOMER_STREAM_TOPIC,
                 Serdes.String().deserializer(),
                 TopStreamingArtistByState.ENRICHED_ARTIST_CUSTOMER_STREAM_JSON_SERDE.deserializer()
+        );
+
+        addressInputTopic = testDriver.createInputTopic(
+                TopStreamingArtistByState.ADDRESS_INPUT_TOPIC,
+                Serdes.String().serializer(),
+                TopStreamingArtistByState.SERDE_ADDRESS_JSON.serializer()
+        );
+
+        enrichedArtistAddressTopic = testDriver.createOutputTopic(
+                TopStreamingArtistByState.ENRICHED_ARTIST_ADDRESS_STREAM_TOPIC,
+                Serdes.String().deserializer(),
+                TopStreamingArtistByState.ENRICHED_ARTIST_ADDRESS_STREAM_JSON_SERDE.deserializer()
         );
 
         outputTopic = testDriver.createOutputTopic(
@@ -383,4 +397,176 @@ public class TopStreamingArtistByStateTest {
 
         assertEquals(0, enrichedArtistCustomerTopic.getQueueSize());
     }
+
+    //=====================================================================================
+    // Test 5
+    //=====================================================================================
+
+    @Test
+    @DisplayName("Multiple Streams with Multiple Artists, Customers, and Addresses")
+    public void multiple_streams_multiple_artists_customers_addresses() {
+        // ARRANGE
+        // First artist and associated streams
+        String artistId1 = "artist-4a";
+        Artist artist1 = ARTISTS.generate(artistId1);
+
+        String streamId1 = "stream-4a";
+        String streamId2 = "stream-4b";
+        String customerId1 = "customer-4a";
+        String customerId2 = "customer-4b";
+
+        Stream stream1 = STREAMS.generate(customerId1, artistId1);
+        Stream stream2 = STREAMS.generate(customerId2, artistId1);
+
+        // Customers
+        Customer customer1 = CUSTOMERS.generate(customerId1);
+        Customer customer2 = CUSTOMERS.generate(customerId2);
+
+        // Addresses
+        Address address1 = ADDRESSES.generateCustomerAddress(customerId1);
+        Address address2 = ADDRESSES.generateCustomerAddress(customerId2);
+
+        // Second artist and associated streams
+        String artistId2 = "artist-4c";
+        Artist artist2 = ARTISTS.generate(artistId2);
+
+        String streamId3 = "stream-4c";
+        String streamId4 = "stream-4d";
+        String customerId3 = "customer-4c";
+        String customerId4 = "customer-4d";
+
+        Stream stream3 = STREAMS.generate(customerId3, artistId2);
+        Stream stream4 = STREAMS.generate(customerId4, artistId2);
+
+        // More customers
+        Customer customer3 = CUSTOMERS.generate(customerId3);
+        Customer customer4 = CUSTOMERS.generate(customerId4);
+
+        // More addresses
+        Address address3 = ADDRESSES.generateCustomerAddress(customerId3);
+        Address address4 = ADDRESSES.generateCustomerAddress(customerId4);
+
+        // ACT - Input data
+        // Add artists first
+        artistInputTopic.pipeInput(artistId1, artist1);
+        artistInputTopic.pipeInput(artistId2, artist2);
+
+        // Add customers
+        customerInputTopic.pipeInput(customerId1, customer1);
+        customerInputTopic.pipeInput(customerId2, customer2);
+        customerInputTopic.pipeInput(customerId3, customer3);
+        customerInputTopic.pipeInput(customerId4, customer4);
+
+        // Add addresses
+        addressInputTopic.pipeInput(customerId1, address1);
+        addressInputTopic.pipeInput(customerId2, address2);
+        addressInputTopic.pipeInput(customerId3, address3);
+        addressInputTopic.pipeInput(customerId4, address4);
+
+        // Add streams
+        streamInputTopic.pipeInput(streamId1, stream1);
+        streamInputTopic.pipeInput(streamId2, stream2);
+        streamInputTopic.pipeInput(streamId3, stream3);
+        streamInputTopic.pipeInput(streamId4, stream4);
+
+        // ASSERT - Verify output records for enriched stream
+        // Validate the stream1 record
+        TestRecord<String, TopStreamingArtistByState.EnrichedStream> result1 = outputTopic.readRecord();
+        assertEquals(artistId1, result1.key());
+        assertEquals(stream1.id(), result1.value().getStream().id());
+        assertEquals(artist1.id(), result1.value().getArtist().id());
+
+        // Validate the stream2 record
+        TestRecord<String, TopStreamingArtistByState.EnrichedStream> result2 = outputTopic.readRecord();
+        assertEquals(artistId1, result2.key());
+        assertEquals(stream2.id(), result2.value().getStream().id());
+        assertEquals(artist1.id(), result2.value().getArtist().id());
+
+        // Validate the stream3 record
+        TestRecord<String, TopStreamingArtistByState.EnrichedStream> result3 = outputTopic.readRecord();
+        assertEquals(artistId2, result3.key());
+        assertEquals(stream3.id(), result3.value().getStream().id());
+        assertEquals(artist2.id(), result3.value().getArtist().id());
+
+        // Validate the stream4 record
+        TestRecord<String, TopStreamingArtistByState.EnrichedStream> result4 = outputTopic.readRecord();
+        assertEquals(artistId2, result4.key());
+        assertEquals(stream4.id(), result4.value().getStream().id());
+        assertEquals(artist2.id(), result4.value().getArtist().id());
+
+        assertEquals(0, outputTopic.getQueueSize());
+
+        // ASSERT - Verify output records for enriched artist customer stream
+        // Validate the stream1 record with customer
+        TestRecord<String, TopStreamingArtistByState.EnrichedArtistCustomerStream> customerResult1 =
+                enrichedArtistCustomerTopic.readRecord();
+        assertEquals(customerId1, customerResult1.key());
+        assertEquals(stream1.id(), customerResult1.value().getEnrichedStream().getStream().id());
+        assertEquals(artist1.id(), customerResult1.value().getEnrichedStream().getArtist().id());
+        assertEquals(customer1.id(), customerResult1.value().getCustomer().id());
+
+        // Validate the stream2 record with customer
+        TestRecord<String, TopStreamingArtistByState.EnrichedArtistCustomerStream> customerResult2 =
+                enrichedArtistCustomerTopic.readRecord();
+        assertEquals(customerId2, customerResult2.key());
+        assertEquals(stream2.id(), customerResult2.value().getEnrichedStream().getStream().id());
+        assertEquals(artist1.id(), customerResult2.value().getEnrichedStream().getArtist().id());
+        assertEquals(customer2.id(), customerResult2.value().getCustomer().id());
+
+        // Validate the stream3 record with customer
+        TestRecord<String, TopStreamingArtistByState.EnrichedArtistCustomerStream> customerResult3 =
+                enrichedArtistCustomerTopic.readRecord();
+        assertEquals(customerId3, customerResult3.key());
+        assertEquals(stream3.id(), customerResult3.value().getEnrichedStream().getStream().id());
+        assertEquals(artist2.id(), customerResult3.value().getEnrichedStream().getArtist().id());
+        assertEquals(customer3.id(), customerResult3.value().getCustomer().id());
+
+        // Validate the stream4 record with customer
+        TestRecord<String, TopStreamingArtistByState.EnrichedArtistCustomerStream> customerResult4 =
+                enrichedArtistCustomerTopic.readRecord();
+        assertEquals(customerId4, customerResult4.key());
+        assertEquals(stream4.id(), customerResult4.value().getEnrichedStream().getStream().id());
+        assertEquals(artist2.id(), customerResult4.value().getEnrichedStream().getArtist().id());
+        assertEquals(customer4.id(), customerResult4.value().getCustomer().id());
+
+        assertEquals(0, enrichedArtistCustomerTopic.getQueueSize());
+
+        // ASSERT - Verify output records for enriched artist address stream
+        // Validate the stream1 record with address
+        TestRecord<String, TopStreamingArtistByState.EnrichedArtistAddressStream> addressResult1 =
+                enrichedArtistAddressTopic.readRecord();
+        assertEquals(customerId1, addressResult1.key());
+        assertEquals(stream1.id(), addressResult1.value().getEnrichedStream().getStream().id());
+        assertEquals(artist1.id(), addressResult1.value().getEnrichedStream().getArtist().id());
+        assertEquals(address1.id(), addressResult1.value().getAddress().id());
+
+        // Validate the stream2 record with address
+        TestRecord<String, TopStreamingArtistByState.EnrichedArtistAddressStream> addressResult2 =
+                enrichedArtistAddressTopic.readRecord();
+        assertEquals(customerId2, addressResult2.key());
+        assertEquals(stream2.id(), addressResult2.value().getEnrichedStream().getStream().id());
+        assertEquals(artist1.id(), addressResult2.value().getEnrichedStream().getArtist().id());
+        assertEquals(address2.id(), addressResult2.value().getAddress().id());
+
+        // Validate the stream3 record with address
+        TestRecord<String, TopStreamingArtistByState.EnrichedArtistAddressStream> addressResult3 =
+                enrichedArtistAddressTopic.readRecord();
+        assertEquals(customerId3, addressResult3.key());
+        assertEquals(stream3.id(), addressResult3.value().getEnrichedStream().getStream().id());
+        assertEquals(artist2.id(), addressResult3.value().getEnrichedStream().getArtist().id());
+        assertEquals(address3.id(), addressResult3.value().getAddress().id());
+
+        // Validate the stream4 record with address
+        TestRecord<String, TopStreamingArtistByState.EnrichedArtistAddressStream> addressResult4 =
+                enrichedArtistAddressTopic.readRecord();
+        assertEquals(customerId4, addressResult4.key());
+        assertEquals(stream4.id(), addressResult4.value().getEnrichedStream().getStream().id());
+        assertEquals(artist2.id(), addressResult4.value().getEnrichedStream().getArtist().id());
+        assertEquals(address4.id(), addressResult4.value().getAddress().id());
+
+        assertEquals(0, enrichedArtistAddressTopic.getQueueSize());
+    }
+
+
+
 }
