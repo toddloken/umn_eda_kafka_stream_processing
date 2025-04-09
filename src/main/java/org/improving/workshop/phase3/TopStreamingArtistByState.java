@@ -31,6 +31,12 @@ import static org.improving.workshop.Streams.*;
 @Slf4j
 public class TopStreamingArtistByState {
     // Reference TOPIC_DATA_DEMO_* properties in Streams
+    // Define new output topic
+
+    // Define SERDE for customers (assuming this doesn't exist yet)
+    public static final JsonSerde<Customer> SERDE_CUSTOMER_JSON = new JsonSerde<>(Customer.class);
+
+
     public static final String ADDRESS_INPUT_TOPIC = TOPIC_DATA_DEMO_ADDRESSES;
     public static final String CUSTOMER_INPUT_TOPIC = TOPIC_DATA_DEMO_CUSTOMERS;
     public static final String STREAM_INPUT_TOPIC = TOPIC_DATA_DEMO_STREAMS;
@@ -43,8 +49,14 @@ public class TopStreamingArtistByState {
     public static final String CUSTOMER_ADDRESS_KTABLE = "kafka-workshop-customer-address-ktable";
     public static final String CUSTOMER_ADDRESS_STREAM_KTABLE = "kafka-workshop-customer-address-stream-ktable";
     public static final String OUTPUT_TOPIC = "kafka-workshop-top-streaming-artist-by-state";
+    public static final String ENRICHED_ARTIST_CUSTOMER_STREAM_TOPIC = "kafka-workshop-enriched-artist-customer-stream";
 
     // Serdes
+
+    // Define new Serde for the enriched artist customer stream
+    public static final JsonSerde<EnrichedArtistCustomerStream> ENRICHED_ARTIST_CUSTOMER_STREAM_JSON_SERDE =
+            new JsonSerde<>(EnrichedArtistCustomerStream.class);
+
     public static final JsonSerde<Artist> ARTISTS_JSON_SERDE = new JsonSerde<>(Artist.class);
     public static final JsonSerde<CustomerAddress> CUSTOMER_ADDRESS_JSON_SERDE = new JsonSerde<>(CustomerAddress.class);
     public static final JsonSerde<CustomerAddressStream> CUSTOMER_ADDRESS_STREAM_JSON_SERDE = new JsonSerde<>(CustomerAddressStream.class);
@@ -111,6 +123,21 @@ public class TopStreamingArtistByState {
                 .peek((key, artist) -> log.info("Artist '{}' registered with value '{}'", key, artist))
                 .to(ARTISTS_KTABLE, Produced.with(Serdes.String(), ARTISTS_JSON_SERDE));
 
+        // Add Customer KTable
+        KTable<String, Customer> customerTable = builder
+                .table(
+                        CUSTOMER_INPUT_TOPIC,
+                        Materialized
+                                .<String, Customer>as(persistentKeyValueStore("kafka-workshop-customer-ktable"))
+                                .withKeySerde(Serdes.String())
+                                .withValueSerde(SERDE_CUSTOMER_JSON)
+                );
+
+        customerTable
+                .toStream()
+                .peek((key, customer) -> log.info("Customer '{}' registered with value '{}'", key, customer))
+                .to("kafka-workshop-customer-ktable", Produced.with(Serdes.String(), SERDE_CUSTOMER_JSON));
+
         // Stream table needs to be keyed by artistid to join with artist table
         KStream<String, Stream> streamByArtistId = streamTable
                 .toStream()
@@ -128,11 +155,37 @@ public class TopStreamingArtistByState {
         enrichedStream
                 .peek((key, value) -> log.info("Enriched Stream: {}", value))
                 .to(OUTPUT_TOPIC, Produced.with(Serdes.String(), ENRICHED_STREAM_JSON_SERDE));
+
+        // Join the enriched stream with the customer table
+        // First, rekey the enriched stream by customerID
+        KStream<String, EnrichedStream> enrichedStreamByCustomerId = enrichedStream
+                .selectKey((artistId, enriched) -> enriched.getStream().customerid());
+
+        // Join with customer table to create an enriched artist customer stream
+        KStream<String, EnrichedArtistCustomerStream> enrichedArtistCustomerStream = enrichedStreamByCustomerId
+                .join(
+                        customerTable,
+                        (enrichedStreamValue, customer) -> new EnrichedArtistCustomerStream(enrichedStreamValue, customer),
+                        Joined.with(Serdes.String(), ENRICHED_STREAM_JSON_SERDE, SERDE_CUSTOMER_JSON)
+                );
+
+        // Output the enriched artist customer stream to a new topic
+        enrichedArtistCustomerStream
+                .peek((key, value) -> log.info("Enriched Artist Customer Stream: {}", value))
+                .to("kafka-workshop-enriched-artist-customer-stream", Produced.with(Serdes.String(), ENRICHED_ARTIST_CUSTOMER_STREAM_JSON_SERDE));
     }
 
     //===============================================================================================================
     // Data
     //===============================================================================================================
+
+        @Data
+        @NoArgsConstructor
+        @AllArgsConstructor
+        public static class EnrichedArtistCustomerStream {
+        private EnrichedStream enrichedStream;
+        private Customer customer;
+    }
 
     @Data
     @NoArgsConstructor
